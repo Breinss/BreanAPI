@@ -7,8 +7,7 @@ import os
 # Load Firebase configuration from a JSON file
 import json
 
-with open("/etc/secrets/firebase_config.json") as f:
-    firebase_config = json.load(f)
+firebase_config = json.loads(os.getenv("FIREBASE_CONFIG"))
 
 firebase = pyrebase.initialize_app(firebase_config)
 db = firebase.database()
