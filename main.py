@@ -26,7 +26,7 @@ class User(BaseModel):
 class Event(BaseModel):
     user_id: str
     action: str
-    timestamp: datetime = datetime.now()
+    timestamp: str
 
 
 # Routes
