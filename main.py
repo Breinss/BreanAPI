@@ -30,25 +30,31 @@ class Event(BaseModel):
 @app.post("/log-event")
 async def log_event(event: Event):
     try:
-        # Check if the event already exists based on the action (command)
+        # Check if the event already exists for the user and action
         existing_event = (
-            db.child("events").order_by_child("action").equal_to(event.action).get()
+            db.child("events").order_by_child("user_id").equal_to(event.user_id).get()
         )
 
-        # If the event exists, update the usage count and timestamp
+        event_exists = False
         if existing_event.each():
             for e in existing_event.each():
                 event_data = e.val()
-                event_data["usage_count"] = event_data.get("usage_count", 0) + 1
-                event_data["timestamp"] = (
-                    datetime.now().isoformat()
-                )  # Update the timestamp to now
-                db.child("events").child(e.key()).set(
-                    event_data
-                )  # Update the existing event
+                # If the action matches, it's the same command for the same user
+                if event_data["action"] == event.action:
+                    # Update the existing event's usage count, timestamp, and client_id
+                    event_data["usage_count"] = event_data.get("usage_count", 0) + 1
+                    event_data["timestamp"] = (
+                        datetime.now().isoformat()
+                    )  # Update the timestamp to now
+                    event_data["client_id"] = event.client_id  # Update client_id
+                    db.child("events").child(e.key()).set(
+                        event_data
+                    )  # Update the existing event
+                    event_exists = True
+                    break
 
-        else:
-            # If the event doesn't exist, create a new event with a usage count of 1
+        if not event_exists:
+            # If no existing event, create a new entry for the user and action
             event_data = event.dict()
             event_data["usage_count"] = 1
             event_data["timestamp"] = (
