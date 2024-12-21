@@ -32,12 +32,7 @@ class Event(BaseModel):
     client_id: str
 
 
-class CommandUsage(BaseModel):
-    timestamp: str
-    usage_count: int
-
-
-# Routes
+# Route to log user information (for example, a new user)
 @app.post("/log-user")
 async def log_user(user: User):
     try:
@@ -48,52 +43,45 @@ async def log_user(user: User):
         raise HTTPException(status_code=500, detail=f"Error logging user: {str(e)}")
 
 
+# Route to log an event (and update usage if exists)
 @app.post("/log-event")
 async def log_event(event: Event):
-    username = event.user_id
-    command = event.action
-    timestamp = datetime.now().isoformat()  # Get current timestamp
-
-    # Define the unique key for this event
-    command_key = f"{username}_{command}"
-
-    # Reference to the command usage node in Firebase
-    command_ref = db.child("command_usage").child(command_key)
-
     try:
-        # Fetch existing command usage data
-        existing_data = command_ref.get()
+        # Try to find existing event for the same action and user
+        event_ref = db.child("events").child(event.user_id).child(event.action)
 
-        if existing_data.val():
-            # If the record exists, increment the usage count
-            current_count = existing_data.val().get("usage_count", 0)
-            new_data = CommandUsage(
-                timestamp=timestamp,
-                usage_count=current_count + 1,  # Increment the count
-            )
-            # Update the usage count in Firebase
-            command_ref.update(new_data.dict())
-            return {
-                "message": f"Updated usage count for {username} using {command}. New count: {current_count + 1}"
-            }
+        existing_event = event_ref.get()
+
+        if existing_event.val():
+            # If the event already exists, update the timestamp and increment usage count
+            existing_data = existing_event.val()
+            existing_data["usage_count"] += 1
+            existing_data["timestamp"] = (
+                datetime.now().isoformat()
+            )  # Update the timestamp to the current time
+            event_ref.set(existing_data)  # Update the event data
         else:
-            # If no record exists, create a new one with usage count 1
-            new_data = CommandUsage(timestamp=timestamp, usage_count=1)
-            # Set the new record in Firebase
-            command_ref.set(new_data.dict())
-            return {"message": f"Created new record for {username} using {command}."}
+            # If no event exists, create a new event with usage_count set to 1 and store timestamp
+            event_data = event.dict()
+            event_data["usage_count"] = 1
+            event_data["timestamp"] = (
+                datetime.now().isoformat()
+            )  # Store timestamp for the first time
+            event_ref.set(event_data)
 
+        return {"message": "Event logged successfully", "event": event}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error logging event: {str(e)}")
 
 
+# Route to get event logs
 @app.get("/get_event_logs")
 async def get_event_logs(event: Optional[str] = None):
     if not event:
         raise HTTPException(status_code=400, detail="Missing 'event' query parameter")
 
     try:
-        # Query Firebase Realtime Database for events
+        # Query Firebase Realtime Database for events matching the action
         event_logs = db.child("events").order_by_child("action").equal_to(event).get()
 
         if event_logs.each():
