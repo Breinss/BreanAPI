@@ -2,9 +2,16 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pyrebase
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import json
+import logging
+
+# Set up logging
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 # Load Firebase configuration from environment variable (or JSON file)
 firebase_config = json.loads(os.getenv("FIREBASE_CONFIG"))
@@ -17,74 +24,107 @@ db = firebase.database()
 app = FastAPI()
 
 
-# Pydantic models for User and Event
+# Pydantic models for Event with more detailed validation
 class Event(BaseModel):
     user_id: str
     action: str
     timestamp: str
     client_id: str
 
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": "Breinss",
+                "action": "widget",
+                "timestamp": "2024-12-21T07:09:13",
+                "client_id": "example_client_id",
+            }
+        }
 
-# Routes
+
 @app.post("/log-event")
 async def log_event(event: Event):
     try:
-        # Check if the event already exists for the user and action
-        existing_event = (
-            db.child("events").order_by_child("user_id").equal_to(event.user_id).get()
-        )
+        logger.info(f"Received event: {event.dict()}")
 
+        # Check if the event already exists for the user and action combination
+        existing_events = db.child("events").get()
         event_exists = False
-        if existing_event.each():
-            for e in existing_event.each():
+        existing_key = None
+
+        if existing_events.each():
+            for e in existing_events.each():
                 event_data = e.val()
-                # If the action matches, it's the same command for the same user
-                if event_data["action"] == event.action:
-                    # Update the existing event's usage count, timestamp, and client_id
-                    event_data["usage_count"] = event_data.get("usage_count", 0) + 1
-                    event_data["timestamp"] = (
-                        datetime.now().isoformat()
-                    )  # Update the timestamp to now
-                    event_data["client_id"] = event.client_id  # Update client_id
-                    db.child("events").child(e.key()).set(
-                        event_data
-                    )  # Update the existing event
+                if (
+                    event_data.get("user_id") == event.user_id
+                    and event_data.get("action") == event.action
+                ):
                     event_exists = True
+                    existing_key = e.key()
+                    logger.debug(f"Found existing event with key: {existing_key}")
                     break
 
-        if not event_exists:
-            # If no existing event, create a new entry for the user and action
-            event_data = event.dict()
-            event_data["usage_count"] = 1
-            event_data["timestamp"] = (
-                datetime.now().isoformat()
-            )  # Store timestamp for the first time
-            db.child("events").push(event_data)  # Push new event
+        if event_exists and existing_key:
+            # Update existing event
+            event_data = {
+                "user_id": event.user_id,
+                "action": event.action,
+                "timestamp": event.timestamp,
+                "client_id": event.client_id,
+                "usage_count": event_data.get("usage_count", 0) + 1,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            }
+            logger.info(f"Updating existing event: {event_data}")
+            db.child("events").child(existing_key).update(event_data)
+        else:
+            # Create new event
+            event_data = {
+                **event.dict(),
+                "usage_count": 1,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            logger.info(f"Creating new event: {event_data}")
+            db.child("events").push(event_data)
 
-        return {"message": "Event logged successfully", "event": event}
+        return {
+            "status": "success",
+            "message": "Event logged successfully",
+            "event": event_data,
+        }
 
     except Exception as e:
+        logger.error(f"Error logging event: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error logging event: {str(e)}")
 
 
 @app.get("/get_event_logs")
 async def get_event_logs(event: Optional[str] = None):
     try:
+        logger.info(f"Fetching logs for event: {event if event else 'all'}")
+
         if event:
-            # If event query parameter is provided, filter by action
+            # Fetch specific event logs
             event_logs = (
                 db.child("events").order_by_child("action").equal_to(event).get()
             )
         else:
-            # If no event is provided, fetch all logs
+            # Fetch all logs
             event_logs = db.child("events").get()
 
-        # Check if any event logs were found
         if event_logs.each():
             logs = [log.val() for log in event_logs.each()]
+            logger.debug(f"Found {len(logs)} logs")
             return {"logs": logs}
         else:
-            raise HTTPException(status_code=404, detail="No logs found")
+            logger.warning(f"No logs found for event: {event if event else 'any'}")
+            return {"logs": []}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching event logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching logs: {str(e)}")
+
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
