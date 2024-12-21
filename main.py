@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import pyrebase
 from datetime import datetime
 import os
-import requests
+from flask import Flask, request, jsonify
 
 # Load Firebase configuration from a JSON file
 import json
