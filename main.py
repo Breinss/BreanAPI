@@ -3,6 +3,7 @@ from pydantic import BaseModel
 import pyrebase
 from datetime import datetime
 import os
+import requests
 
 # Load Firebase configuration from a JSON file
 import json
