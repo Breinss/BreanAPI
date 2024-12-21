@@ -1,23 +1,24 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pyrebase
-from datetime import datetime
 import os
-from flask import Flask, request, jsonify
+from datetime import datetime
+from typing import Optional
 
-# Load Firebase configuration from a JSON file
+# Load Firebase configuration from environment variable (or JSON file)
 import json
 
 firebase_config = json.loads(os.getenv("FIREBASE_CONFIG"))
 
+# Initialize Firebase
 firebase = pyrebase.initialize_app(firebase_config)
 db = firebase.database()
 
-# Initialize FastAPI
+# Initialize FastAPI app
 app = FastAPI()
 
 
-# Pydantic models
+# Pydantic models for User and Event
 class User(BaseModel):
     id: str
     name: str
@@ -53,23 +54,21 @@ async def log_event(event: Event):
 
 
 @app.get("/get_event_logs")
-def get_event_logs():
-    # Get 'event' parameter from query string
-    event = request.args.get("event", None)
+async def get_event_logs(event: Optional[str] = None):
     if not event:
-        return jsonify({"error": "Missing 'event' query parameter"}), 400
+        raise HTTPException(status_code=400, detail="Missing 'event' query parameter")
 
     try:
-        # Query Firestore collection where events are stored
-        logs_ref = db.collection("events").document(
-            event
-        )  # Replace 'events' with your Firestore collection name
-        logs = logs_ref.get()
+        # Query Firebase Realtime Database for events
+        event_logs = db.child("events").order_by_child("action").equal_to(event).get()
 
-        # Check if the event exists
-        if logs.exists:
-            return jsonify(logs.to_dict()), 200
+        if event_logs.each():
+            logs = [log.val() for log in event_logs.each()]
+            return {"logs": logs}
         else:
-            return jsonify({"error": f"No logs found for event: {event}"}), 404
+            raise HTTPException(
+                status_code=404, detail=f"No logs found for event: {event}"
+            )
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
