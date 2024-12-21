@@ -42,17 +42,31 @@ class Event(BaseModel):
         }
 
 
+def get_events_path(timestamp: str = None) -> str:
+    """
+    Get the Firebase path for events based on the month
+    """
+    if timestamp:
+        date = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    else:
+        date = datetime.now(timezone.utc)
+    return f"events/{date.year}-{date.month:02d}"
+
+
 @app.post("/log-event")
 async def log_event(event: Event):
     try:
         logger.info(f"Received event: {event.dict()}")
 
+        # Get the current month's events path
+        current_events_path = get_events_path(event.timestamp)
+
         # Check if the event already exists for the user and action combination
-        existing_events = db.child("events").get()
+        existing_events = db.child(current_events_path).get()
         event_exists = False
         existing_key = None
 
-        if existing_events.each():
+        if existing_events and existing_events.each():
             for e in existing_events.each():
                 event_data = e.val()
                 if (
@@ -75,7 +89,7 @@ async def log_event(event: Event):
                 "last_updated": datetime.now(timezone.utc).isoformat(),
             }
             logger.info(f"Updating existing event: {event_data}")
-            db.child("events").child(existing_key).update(event_data)
+            db.child(current_events_path).child(existing_key).update(event_data)
         else:
             # Create new event
             event_data = {
@@ -84,7 +98,7 @@ async def log_event(event: Event):
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             logger.info(f"Creating new event: {event_data}")
-            db.child("events").push(event_data)
+            db.child(current_events_path).push(event_data)
 
         return {
             "status": "success",
@@ -98,20 +112,29 @@ async def log_event(event: Event):
 
 
 @app.get("/get_event_logs")
-async def get_event_logs(event: Optional[str] = None):
+async def get_event_logs(
+    event: Optional[str] = None, month: Optional[str] = None  # Format: YYYY-MM
+):
     try:
         logger.info(f"Fetching logs for event: {event if event else 'all'}")
+
+        # If no month specified, use current month
+        if not month:
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+        events_path = f"events/{month}"
+        logger.info(f"Fetching from path: {events_path}")
 
         if event:
             # Fetch specific event logs
             event_logs = (
-                db.child("events").order_by_child("action").equal_to(event).get()
+                db.child(events_path).order_by_child("action").equal_to(event).get()
             )
         else:
             # Fetch all logs
-            event_logs = db.child("events").get()
+            event_logs = db.child(events_path).get()
 
-        if event_logs.each():
+        if event_logs and event_logs.each():
             logs = [log.val() for log in event_logs.each()]
             logger.debug(f"Found {len(logs)} logs")
             return {"logs": logs}
@@ -121,6 +144,31 @@ async def get_event_logs(event: Optional[str] = None):
 
     except Exception as e:
         logger.error(f"Error fetching event logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching logs: {str(e)}")
+
+
+@app.get("/get_all_months_logs")
+async def get_all_months_logs(event: Optional[str] = None):
+    """
+    Get logs across all months
+    """
+    try:
+        all_events = db.child("events").get()
+        all_logs = []
+
+        if all_events and all_events.each():
+            for month_node in all_events.each():
+                month_logs = month_node.val()
+                if isinstance(month_logs, dict):
+                    for log in month_logs.values():
+                        if event and log.get("action") != event:
+                            continue
+                        all_logs.append(log)
+
+        return {"logs": all_logs}
+
+    except Exception as e:
+        logger.error(f"Error fetching all months logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching logs: {str(e)}")
 
 
