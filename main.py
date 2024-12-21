@@ -32,6 +32,11 @@ class Event(BaseModel):
     client_id: str
 
 
+class CommandUsage(BaseModel):
+    timestamp: str
+    usage_count: int
+
+
 # Routes
 @app.post("/log-user")
 async def log_user(user: User):
@@ -45,10 +50,39 @@ async def log_user(user: User):
 
 @app.post("/log-event")
 async def log_event(event: Event):
+    username = event.user_id
+    command = event.action
+    timestamp = datetime.now().isoformat()  # Get current timestamp
+
+    # Define the unique key for this event
+    command_key = f"{username}_{command}"
+
+    # Reference to the command usage node in Firebase
+    command_ref = db.child("command_usage").child(command_key)
+
     try:
-        # Push event to Firebase Realtime Database
-        db.child("events").push(event.dict())
-        return {"message": "Event logged successfully", "event": event}
+        # Fetch existing command usage data
+        existing_data = command_ref.get()
+
+        if existing_data.val():
+            # If the record exists, increment the usage count
+            current_count = existing_data.val().get("usage_count", 0)
+            new_data = CommandUsage(
+                timestamp=timestamp,
+                usage_count=current_count + 1,  # Increment the count
+            )
+            # Update the usage count in Firebase
+            command_ref.update(new_data.dict())
+            return {
+                "message": f"Updated usage count for {username} using {command}. New count: {current_count + 1}"
+            }
+        else:
+            # If no record exists, create a new one with usage count 1
+            new_data = CommandUsage(timestamp=timestamp, usage_count=1)
+            # Set the new record in Firebase
+            command_ref.set(new_data.dict())
+            return {"message": f"Created new record for {username} using {command}."}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error logging event: {str(e)}")
 
