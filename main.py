@@ -4,7 +4,6 @@ import pyrebase
 import os
 from datetime import datetime
 from typing import Optional
-
 import json
 
 # Load Firebase configuration from environment variable (or JSON file)
@@ -70,20 +69,22 @@ async def log_event(event: Event):
 
 @app.get("/get_event_logs")
 async def get_event_logs(event: Optional[str] = None):
-    if not event:
-        raise HTTPException(status_code=400, detail="Missing 'event' query parameter")
-
     try:
-        # Query Firebase Realtime Database for events
-        event_logs = db.child("events").order_by_child("action").equal_to(event).get()
+        if event:
+            # If event query parameter is provided, filter by action
+            event_logs = (
+                db.child("events").order_by_child("action").equal_to(event).get()
+            )
+        else:
+            # If no event is provided, fetch all logs
+            event_logs = db.child("events").get()
 
+        # Check if any event logs were found
         if event_logs.each():
             logs = [log.val() for log in event_logs.each()]
             return {"logs": logs}
         else:
-            raise HTTPException(
-                status_code=404, detail=f"No logs found for event: {event}"
-            )
+            raise HTTPException(status_code=404, detail="No logs found")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
